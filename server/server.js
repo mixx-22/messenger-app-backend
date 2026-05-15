@@ -13,6 +13,7 @@ const Group = require("./models/Group");
 
 const app = express();
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || "uploads");
+const gifDir = process.env.GIFS_DIR ? path.resolve(process.env.GIFS_DIR) : "";
 const allowedOrigins = String(process.env.CORS_ORIGIN || "*")
   .split(",")
   .map((origin) => origin.trim())
@@ -31,6 +32,9 @@ function allowOrigin(origin, callback) {
 app.use(cors({ origin: allowOrigin }));
 app.use(express.json());
 app.use("/uploads", express.static(uploadDir));
+if (gifDir) {
+  app.use("/gifs", express.static(gifDir));
+}
 app.set("uploadDir", uploadDir);
 
 /* =========================
@@ -43,6 +47,7 @@ app.use("/api/groups", require("./routes/groupRoutes"));
 app.use("/api/organizations", require("./routes/organizationRoutes"));
 app.use("/api/messages", require("./routes/messageRoutes"));
 app.use("/api/upload", require("./routes/uploadRoutes"));
+app.use("/api/gifs", require("./routes/gifRoutes"));
 app.use("/api/audit", require("./routes/auditRoutes"));
 
 const appSettingService = require("./services/appSettingService");
