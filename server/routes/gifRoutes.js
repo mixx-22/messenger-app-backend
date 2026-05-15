@@ -10,6 +10,29 @@ function isGifConfigured() {
   return Boolean(process.env.GIFS_DIR && process.env.GIFS_DIR.trim());
 }
 
+function gifFilePath(name) {
+  const safeName = path.basename(String(name || ""));
+  if (!safeName || !GIF_EXTENSIONS.has(path.extname(safeName).toLowerCase())) {
+    return "";
+  }
+  return path.join(gifDir, safeName);
+}
+
+router.get("/file/:name", (req, res, next) => {
+  if (!isGifConfigured()) {
+    return res.status(404).end();
+  }
+
+  const filePath = gifFilePath(req.params.name);
+  if (!filePath) {
+    return res.status(404).end();
+  }
+
+  return res.sendFile(filePath, (err) => {
+    if (err) next(err);
+  });
+});
+
 router.get("/", auth, async (req, res, next) => {
   try {
     if (!isGifConfigured()) {
@@ -38,7 +61,7 @@ router.get("/", auth, async (req, res, next) => {
         return {
           fileName: name,
           originalName: name,
-          url: `/gifs/${encodeURIComponent(name)}`,
+          url: `/api/gifs/file/${encodeURIComponent(name)}`,
           mimetype: ext === ".webp" ? "image/webp" : "image/gif",
           type: "image",
           size: stat.size,
