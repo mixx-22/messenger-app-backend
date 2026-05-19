@@ -269,6 +269,7 @@ io.on("connection", (socket) => {
         .populate("senderId", "name email avatarUrl")
         .populate("receiverId", "name email avatarUrl")
         .populate("groupId", "name avatarUrl members")
+        .populate("organizationId", "name avatarUrl members")
         .populate("seenBy.userId", "name email avatarUrl");
 
       if (!message || !socket.userId) return;
@@ -300,6 +301,14 @@ io.on("connection", (socket) => {
           : [];
         members.forEach((memberId) => {
           io.to(String(memberId)).emit("message_seen_update", payload);
+        });
+      } else if (payload.channel === "organization") {
+        const members = Array.isArray(message.organizationId?.members)
+          ? message.organizationId.members
+          : [];
+        members.forEach((member) => {
+          const memberId = idFromRef(member?.userId || member);
+          if (memberId) io.to(String(memberId)).emit("message_seen_update", payload);
         });
       } else {
         const senderRoom = idFromRef(message.senderId);

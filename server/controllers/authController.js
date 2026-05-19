@@ -92,3 +92,30 @@ exports.login = async (req, res) => {
     res.status(400).json({ message: err.message || "Login failed" });
   }
 };
+
+exports.restoreSession = async (req, res) => {
+  try {
+    const auth = String(req.headers.authorization || "");
+    const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
+    if (!token) return res.status(401).json({ message: "No token" });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      ignoreExpiration: true,
+    });
+    if (!decoded?.id) return res.status(401).json({ message: "Invalid token" });
+
+    const user = await User.findById(decoded.id);
+    if (!user) return res.status(401).json({ message: "Invalid user" });
+    if (user.suspended) {
+      return res.status(403).json({
+        message: user.suspendReason
+          ? `Account suspended: ${user.suspendReason}`
+          : "Account suspended",
+      });
+    }
+
+    res.json({ token: createToken(user), user: userWithoutPassword(user) });
+  } catch {
+    res.status(401).json({ message: "Invalid token" });
+  }
+};
