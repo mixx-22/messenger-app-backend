@@ -19,6 +19,9 @@ const {
   sendGroupMessage,
   togglePinMessage,
   toggleStarMessage,
+  getAllStarredMessages,
+  getChatStates,
+  updateChatState,
   getModerationMessages,
   moderateMessage
 } = require('../controllers/messageController');
@@ -34,6 +37,9 @@ router.get('/moderation', auth, requireRole('Administrator'), getModerationMessa
 router.patch('/moderation/:id', auth, requireRole('Administrator'), moderateMessage);
 router.post('/pin', auth, togglePinMessage);
 router.post('/star', auth, toggleStarMessage);
+router.get('/starred', auth, getAllStarredMessages);
+router.get('/chat-states', auth, getChatStates);
+router.patch('/chat-state', auth, updateChatState);
 router.get('/groups/:groupId', auth, getGroupMessages);
 router.post('/groups/:groupId', auth, sendGroupMessage);
 router.get('/unread-by-sender', auth, getUnreadBySender);

@@ -51,14 +51,18 @@ exports.getConversation = async (userId, otherUserId, skip, limit) => {
  * Chunk of a 1:1 thread in chronological order (oldest → newest in the returned slice).
  * `before` excludes that id and newer; omit for latest window.
  */
-exports.getConversationPage = async ({ userId, otherUserId, before, limit }) => {
+exports.getConversationPage = async ({ userId, otherUserId, before, limit, after }) => {
   const pair = [
     { senderId: userId, receiverId: otherUserId },
     { senderId: otherUserId, receiverId: userId }
   ];
 
-  const filter = before
-    ? { $and: [{ $or: pair }, { _id: { $lt: before } }] }
+  const bounds = [];
+  if (before) bounds.push({ _id: { $lt: before } });
+  if (after) bounds.push({ createdAt: { $gt: after } });
+
+  const filter = bounds.length
+    ? { $and: [{ $or: pair }, ...bounds] }
     : { $or: pair };
 
   const batch = await Message.find(filter)
@@ -92,9 +96,13 @@ exports.getAnnouncementPage = async ({ before, limit }) => {
   return { items: slice, hasMore };
 };
 
-exports.getGroupPage = async ({ groupId, before, limit }) => {
-  const filter = before
-    ? { groupId, channel: 'group', _id: { $lt: before } }
+exports.getGroupPage = async ({ groupId, before, limit, after }) => {
+  const bounds = [];
+  if (before) bounds.push({ _id: { $lt: before } });
+  if (after) bounds.push({ createdAt: { $gt: after } });
+
+  const filter = bounds.length
+    ? { $and: [{ groupId, channel: 'group' }, ...bounds] }
     : { groupId, channel: 'group' };
 
   const batch = await Message.find(filter)

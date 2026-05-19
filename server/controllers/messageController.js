@@ -4,10 +4,12 @@ const Notification = require("../models/Notification");
 const User = require("../models/User");
 const Group = require("../models/Group");
 const OrganizationChannel = require("../models/OrganizationChannel");
+const ChatState = require("../models/ChatState");
 const messageService = require("../services/messageService");
 const { recordAudit } = require("../services/auditService");
 
 const ANNOUNCEMENT_ROLES = new Set(["Administrator", "Management"]);
+const GROUP_THREAD_PREFIX = "group:";
 
 function hasAnyRole(user, allowedRoles) {
   const roles = Array.isArray(user?.roles) && user.roles.length
@@ -152,6 +154,20 @@ function idFromRef(ref) {
   if (ref == null) return "";
   if (typeof ref === "object") return String(ref._id || ref.id || "");
   return String(ref);
+}
+
+function directThreadIdForUsers(a, b) {
+  const ids = [String(a || ""), String(b || "")].filter(Boolean).sort();
+  return ids.length === 2 ? `${ids[0]}:${ids[1]}` : "";
+}
+
+function groupThreadIdFor(groupId) {
+  return `${GROUP_THREAD_PREFIX}${idFromRef(groupId)}`;
+}
+
+async function chatStateFor(userId, threadId) {
+  if (!threadId) return null;
+  return ChatState.findOne({ userId, threadId }).lean();
 }
 
 function serializeMessage(message) {
@@ -355,13 +371,18 @@ exports.getConversation = async (req, res, next) => {
       ? req.query.before.trim()
       : undefined;
     const legacyPageRequested = typeof req.query.page !== "undefined" && before === undefined;
+    const state = await chatStateFor(
+      req.user.id,
+      directThreadIdForUsers(req.user.id, otherUserId),
+    );
 
     if (!legacyPageRequested) {
       const { items, hasMore } = await messageService.getConversationPage({
         userId: req.user.id,
         otherUserId,
         before,
-        limit
+        limit,
+        after: state?.deletedAt || null,
       });
 
       const nextOlderCursor =
@@ -998,11 +1019,13 @@ exports.getGroupMessages = async (req, res, next) => {
     const before = typeof req.query.before === "string" && req.query.before.trim()
       ? req.query.before.trim()
       : undefined;
+    const state = await chatStateFor(req.user.id, groupThreadIdFor(group._id));
 
     const { items, hasMore } = await messageService.getGroupPage({
       groupId: group._id,
       before,
       limit,
+      after: state?.deletedAt || null,
     });
 
     const nextOlderCursor =
@@ -1181,6 +1204,112 @@ exports.getFlaggedMessages = async (req, res, next) => {
       .populate("organizationId", "name avatarUrl members subjects");
 
     res.json({ items: messages.map(serializeMessage) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getAllStarredMessages = async (req, res, next) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 300);
+    const uid = new mongoose.Types.ObjectId(req.user.id);
+    const groups = await Group.find({ members: req.user.id }).select("_id").lean();
+
+    const messages = await Message.find({
+      deleted: { $ne: true },
+      starredBy: req.user.id,
+      $or: [
+        {
+          $and: [
+            {
+              $or: [
+                { channel: "direct" },
+                { channel: { $exists: false } },
+                { channel: null },
+              ],
+            },
+            { $or: [{ senderId: uid }, { receiverId: uid }] },
+          ],
+        },
+        {
+          channel: "group",
+          groupId: { $in: groups.map((group) => group._id) },
+        },
+      ],
+    })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit)
+      .populate("replyTo")
+      .populate("senderId", "name email avatarUrl")
+      .populate("receiverId", "name email avatarUrl")
+      .populate("seenBy.userId", "name email avatarUrl")
+      .populate("groupId", "name avatarUrl members");
+
+    res.json({ items: messages.map(serializeMessage) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getChatStates = async (req, res, next) => {
+  try {
+    const rows = await ChatState.find({ userId: req.user.id }).lean();
+    res.json({
+      items: rows.map((row) => ({
+        threadId: row.threadId,
+        archived: Boolean(row.archived),
+        deletedAt: row.deletedAt || null,
+        updatedAt: row.updatedAt,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.updateChatState = async (req, res, next) => {
+  try {
+    const threadId = typeof req.body?.threadId === "string" ? req.body.threadId.trim() : "";
+    const action = typeof req.body?.action === "string" ? req.body.action.trim() : "";
+    if (!threadId) return res.status(400).json({ message: "threadId is required" });
+
+    const isGroupThread = threadId.startsWith(GROUP_THREAD_PREFIX);
+    if (isGroupThread) {
+      const group = await findGroupForMember(threadId.slice(GROUP_THREAD_PREFIX.length), req.user.id);
+      if (!group) return res.status(404).json({ message: "Group not found" });
+    } else if (threadId === "announcement" || threadId.startsWith("org:")) {
+      return res.status(400).json({ message: "This chat cannot be archived or deleted" });
+    } else {
+      const parts = threadId.split(":").filter(Boolean);
+      if (parts.length !== 2 || !parts.includes(String(req.user.id))) {
+        return res.status(400).json({ message: "Invalid direct chat" });
+      }
+    }
+
+    const patch = {};
+    if (action === "archive") {
+      patch.archived = true;
+    } else if (action === "unarchive") {
+      patch.archived = false;
+    } else if (action === "delete") {
+      patch.archived = false;
+      patch.deletedAt = new Date();
+    } else {
+      return res.status(400).json({ message: "Valid action is required" });
+    }
+
+    const state = await ChatState.findOneAndUpdate(
+      { userId: req.user.id, threadId },
+      { $set: patch },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).lean();
+
+    res.json({
+      threadId: state.threadId,
+      archived: Boolean(state.archived),
+      deletedAt: state.deletedAt || null,
+      updatedAt: state.updatedAt,
+    });
   } catch (err) {
     next(err);
   }
